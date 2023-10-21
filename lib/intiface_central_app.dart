@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -18,6 +19,7 @@ import 'package:intiface_central/bloc/util/gui_settings_cubit.dart';
 import 'package:intiface_central/bloc/util/navigation_cubit.dart';
 import 'package:intiface_central/bloc/util/network_info_cubit.dart';
 import 'package:intiface_central/util/intiface_util.dart';
+import 'package:screen_retriever/screen_retriever.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:intiface_central/bloc/device_configuration/device_configuration.dart';
 import 'package:intiface_central/bloc/engine/library_engine_provider.dart';
@@ -65,7 +67,8 @@ class IntifaceCentralApp extends StatelessWidget with WindowListener {
 
   @override
   void onWindowMove() async {
-    guiSettingsCubit.setWindowPosition(await windowManager.getPosition());
+    var windowPosition = await windowManager.getPosition();
+    guiSettingsCubit.setWindowPosition(windowPosition);
   }
 
   Future<Widget> buildApp() async {
@@ -94,6 +97,7 @@ class IntifaceCentralApp extends StatelessWidget with WindowListener {
       logInfo(IntifacePaths.logPath.path);
       var entities = (await dir.list().toList()).whereType<File>();
       Sentry.configureScope((scope) {
+        scope.clearAttachments();
         final logAttachments = entities.map((e) => IoSentryAttachment.fromFile(e));
         final userConfigAttachment = IoSentryAttachment.fromFile(IntifacePaths.userDeviceConfigFile);
         for (var attachment in logAttachments) {
@@ -131,7 +135,31 @@ class IntifaceCentralApp extends StatelessWidget with WindowListener {
       );
 
       windowManager.addListener(this);
-      windowManager.setPosition(guiSettingsCubit.getWindowPosition());
+
+      // #87: Fetch our displays and make sure what we're trying to show is in bounds. If it isn't, set to top left of
+      // main display.
+
+      var displays = await screenRetriever.getAllDisplays();
+      var windowPosition = guiSettingsCubit.getWindowPosition();
+      var windowInBounds = false;
+      for (var display in displays) {
+        logInfo(
+            "Testing window position $windowPosition against ${display.name} (${display.size} ${display.visiblePosition})");
+        if (display.visiblePosition!.dx < windowPosition.dx &&
+            (display.visiblePosition!.dx + display.size.width) > windowPosition.dx &&
+            display.visiblePosition!.dy < windowPosition.dy &&
+            (display.visiblePosition!.dy + display.size.width) > windowPosition.dy) {
+          windowInBounds = true;
+          logInfo("Window in bounds for ${display.name}");
+          break;
+        }
+      }
+      if (!windowInBounds) {
+        logInfo("Window position out of bounds, resetting position");
+        guiSettingsCubit.setWindowPosition(const Offset(0.0, 0.0));
+      } else {
+        windowManager.setPosition(guiSettingsCubit.getWindowPosition());
+      }
       windowDisplayModeResize(configCubit.useCompactDisplay, guiSettingsCubit);
       windowManager.waitUntilReadyToShow(windowOptions, () async {
         await windowManager.show();
